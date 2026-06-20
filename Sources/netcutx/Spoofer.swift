@@ -1,13 +1,13 @@
 import Foundation
 import Darwin
 
-private var _stopFlag: Int32 = 0
+var _stopFlag: Int32 = 0
 
 private let _sigHandler: @convention(c) (Int32) -> Void = { _ in
     _stopFlag = 1
 }
 
-private func setupSignal() {
+func setupSignal() {
     _stopFlag = 0
     var sa = sigaction()
     sigemptyset(&sa.sa_mask)
@@ -16,6 +16,9 @@ private func setupSignal() {
     sigaction(SIGINT, &sa, nil)
     sigaction(SIGTERM, &sa, nil)
 }
+
+func requestSpooferStop() { _stopFlag = 1 }
+func resetSpooferStop()   { _stopFlag = 0 }
 
 struct SpooferConfig {
     let interface: String

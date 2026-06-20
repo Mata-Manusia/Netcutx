@@ -6,7 +6,11 @@ func usage() {
 
     Usage:
       sudo netcutx                        Interactive mode
-      sudo netcutx <victim-ip> [options]
+      sudo netcutx <victim-ip> [options]  CLI mode
+      sudo netcutx install                Install as system daemon (auto-start)
+      sudo netcutx uninstall              Remove system daemon
+      sudo netcutx stop all               Stop active spoofing
+      sudo netcutx status                 Show daemon status
 
     Options:
       -i, --interface <name>  Network interface (default: auto)
@@ -20,6 +24,8 @@ func usage() {
     Examples:
       sudo netcutx
       sudo netcutx 192.168.1.100 -b -f
+      sudo netcutx install
+      sudo netcutx stop all
     """)
 }
 
@@ -28,6 +34,36 @@ func main() {
     if args.contains("--help") {
         usage()
         return
+    }
+
+    // Daemon subcommands
+    if args.count >= 2 {
+        switch args[1] {
+        case "install":
+            installDaemon()
+            return
+        case "uninstall":
+            uninstallDaemon()
+            return
+        case "status":
+            daemonStatus()
+            return
+        case "stop":
+            if args.count >= 3 && args[2] == "all" {
+                stopAll()
+            } else {
+                print("Usage: netcutx stop all")
+            }
+            return
+        case "upgrade":
+            upgradeDaemon()
+            return
+        case "--daemon":
+            runDaemon()
+            return
+        default:
+            break
+        }
     }
 
     let positionalArgs = args.dropFirst().filter { !$0.hasPrefix("-") }
