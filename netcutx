@@ -1,0 +1,10 @@
+#!/bin/bash
+DIR="$(cd "$(dirname "$0")" && pwd)"
+BUILD="$DIR/build/netcutx"
+
+if [ ! -f "$BUILD" ]; then
+    echo "Build dulu..."
+    make -C "$DIR" 2>&1 || { echo "Build gagal"; exit 1; }
+fi
+
+exec sudo "$BUILD" "$@"

@@ -1,0 +1,104 @@
+import Foundation
+
+enum ResolveError: Error, LocalizedError {
+    case timeout(String)
+    case noReply(String)
+    case invalidResponse
+
+    var errorDescription: String? {
+        switch self {
+        case .timeout(let ip): return "Timeout resolving MAC for \(ip)"
+        case .noReply(let ip): return "No ARP reply from \(ip)"
+        case .invalidResponse: return "Invalid ARP response"
+        }
+    }
+}
+
+func resolveMAC(bpf: NetcutxBPF, ourMAC: MACAddr, ourIP: String, targetIP: String) throws -> MACAddr {
+    let req = ARPFrame.buildRequest(srcMAC: ourMAC, srcIP: ourIP, targetIP: targetIP)
+    print("  [debug] ARP req size: \(req.bytes.count) bytes")
+    print("  [debug] ARP req hex: \(req.bytes.map { String(format: "%02x", $0) }.joined())")
+
+    let sendOK = (try? bpf.send(frame: Data(req.bytes))) != nil
+    print("  [debug] send result: \(sendOK ? "OK" : "FAIL")")
+
+    let deadline = Date().addingTimeInterval(3)
+    var attempts = 0
+    while Date() < deadline {
+        do {
+            guard let packet = try bpf.receive(timeout: 0.5) else {
+                attempts += 1
+                print("  [debug] recv attempt \(attempts): timeout (no data)")
+                continue
+            }
+            attempts += 1
+            print("  [debug] recv attempt \(attempts): got \(packet.data.count) bytes")
+            print("  [debug] recv hex: \(packet.data.map { String(format: "%02x", $0) }.prefix(60).joined())")
+
+            guard let frame = ARPFrame(from: packet.data) else {
+                print("  [debug] not a valid ARP frame")
+                continue
+            }
+            if frame.isReply {
+                print("  [debug] ARP reply: senderIP=\(frame.senderIP ?? "?"), senderMAC=\(frame.senderMAC.map(macToString) ?? "?")")
+            } else if frame.isRequest {
+                print("  [debug] ARP request (ignoring)")
+            }
+            if frame.isReply, let sip = frame.senderIP, sip == targetIP, let mac = frame.senderMAC {
+                return mac
+            }
+        } catch {
+            print("  [debug] recv error: \(error)")
+            continue
+        }
+    }
+    throw ResolveError.timeout(targetIP)
+}
+
+func getGatewayIP() -> String? {
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/sbin/route")
+    task.arguments = ["-n", "get", "default"]
+    let out = Pipe()
+    task.standardOutput = out
+    guard (try? task.run()) != nil else { return nil }
+    task.waitUntilExit()
+    let data = out.fileHandleForReading.readDataToEndOfFile()
+    guard let output = String(data: data, encoding: .utf8) else { return nil }
+    for line in output.components(separatedBy: "\n") {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        if trimmed.hasPrefix("gateway:") {
+            let ip = trimmed.components(separatedBy: " ").last?.trimmingCharacters(in: .whitespaces)
+            if let ip = ip, !ip.isEmpty {
+                var addr = in_addr()
+                if inet_pton(AF_INET, ip, &addr) == 1 {
+                    return ip
+                }
+            }
+        }
+    }
+    return nil
+}
+
+func getInterfaceIP(_ ifname: String) -> String? {
+    var addr: UnsafeMutablePointer<ifaddrs>?
+    guard getifaddrs(&addr) == 0, let start = addr else { return nil }
+    defer { freeifaddrs(start) }
+    var ptr = start
+    while true {
+        let info = ptr.pointee
+        if let name = info.ifa_name, String(cString: name) == ifname {
+            let family = info.ifa_addr.pointee.sa_family
+            if family == AF_INET {
+                let sin = info.ifa_addr.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee }
+                var sin_addr = sin.sin_addr
+                var buf = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                inet_ntop(AF_INET, &sin_addr, &buf, socklen_t(INET_ADDRSTRLEN))
+                return String(cString: buf)
+            }
+        }
+        guard let next = info.ifa_next else { break }
+        ptr = next
+    }
+    return nil
+}
